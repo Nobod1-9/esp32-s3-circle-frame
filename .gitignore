@@ -1,0 +1,9 @@
+.DS_Store
+*.bin
+*.elf
+*.map
+*.hex
+build/
+cmake-build-*/
+.vscode/
+.idea/
