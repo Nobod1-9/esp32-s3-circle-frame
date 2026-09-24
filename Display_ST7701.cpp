@@ -422,6 +422,13 @@ void Set_Backlight(uint8_t Light)
 {
   if(Light > Backlight_MAX || Light < 0)
     printf("Set Backlight parameters in the range of 0 to 100 \r\n");
+  else if (Light == 0) {
+    // Fully switch off the backlight in standby instead of leaving a PWM
+    // channel attached at duty 0, which can still leak a faint glow.
+    ledcDetach(LCD_Backlight_PIN);
+    pinMode(LCD_Backlight_PIN, OUTPUT);
+    digitalWrite(LCD_Backlight_PIN, ESP_PANEL_LCD_BK_LIGHT_OFF_LEVEL);
+  }
   else if (Light == 100) {
     // Full brightness should be true DC, not the edge case 1024 duty on a
     // 10-bit PWM timer. This also eliminates PWM as a source of flicker.
@@ -434,4 +441,3 @@ void Set_Backlight(uint8_t Light)
     ledcWrite(LCD_Backlight_PIN, Backlight);
   }
 }
-

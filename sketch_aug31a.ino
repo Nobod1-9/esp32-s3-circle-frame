@@ -13,7 +13,7 @@
 #include "Display_ST7701.h"
 #include "Level_IMU.h"
 
-// 留空时设备建立热点；填写后设备接入家中 Wi-Fi。
+// Wi-Fi upload uses this device hotspot only; external Wi-Fi configuration is disabled.
 constexpr char WIFI_SSID[] = "";
 constexpr char WIFI_PASSWORD[] = "";
 constexpr char AP_SSID[] = "CircleFrame";
@@ -34,7 +34,8 @@ constexpr uint32_t LONG_PRESS_MS = 1000;
 constexpr uint32_t SLEEP_PRESS_MS = 3000;
 uint32_t levelUpdateMs = 20;
 float levelDeadBandDeg = 0.7f;
-constexpr float LEVEL_ANGLE_OFFSET_DEG = 180.0f; // Default image orientation, clockwise.
+constexpr float LEVEL_ANGLE_OFFSET_DEG = 90.0f; // Default image orientation, clockwise.
+constexpr float GIF_ROTATION_CORRECTION_DEG = 90.0f; // GIF decoder/source axes differ by 90 degrees.
 constexpr float LEVEL_ROTATION_SIGN = -1.0f;    // Change to +1 if compensation runs backwards.
 constexpr float BRIGHTNESS_TILT_SIGN = 1.0f;    // Change to -1 if left/right brightness feels reversed.
 constexpr float BRIGHTNESS_DEGREES_PER_STEP = 2.0f;
@@ -108,7 +109,8 @@ uint32_t buttonDownAt = 0, lastButtonChange = 0, lastClickAt = 0;
 uint8_t clickCount = 0;
 uint8_t lastWifiFlashPhase = 0xFF;
 
-enum SettingsItem : uint8_t { SETTINGS_BRIGHTNESS, SETTINGS_WIFI, SETTINGS_BRAKE_LIGHT, SETTINGS_AUTO_BRAKE, SETTINGS_BACK, SETTINGS_ITEM_COUNT };
+// Upload uses the device hotspot only. STA/Wi-Fi provisioning is intentionally disabled.
+enum SettingsItem : uint8_t { SETTINGS_BRIGHTNESS, SETTINGS_BRAKE_LIGHT, SETTINGS_AUTO_BRAKE, SETTINGS_WIFI_UPLOAD, SETTINGS_BACK, SETTINGS_ITEM_COUNT };
 enum PowerMode : uint8_t { MODE_PERFORMANCE, MODE_BALANCED, MODE_POWER_SAVE };
 PowerMode powerMode = MODE_PERFORMANCE;
 
@@ -137,8 +139,11 @@ bool showAnimationFrame();
 const char PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>圆形相框上传</title><style>body{margin:0;background:#101114;color:#f4f4f5;font:16px system-ui;text-align:center}main{max-width:520px;margin:auto;padding:28px 18px}canvas{width:min(82vw,360px);height:min(82vw,360px);border-radius:50%;background:#000;display:block;margin:20px auto;border:2px solid #45464c}input,button{font:inherit;margin:8px;padding:11px;border-radius:9px;border:0}button{background:#4f7cff;color:#fff;font-weight:700}small{color:#b8bbc5;line-height:1.6;display:block}</style><main><h2>圆形相框</h2><small>选择照片后会自动居中裁切为圆形，再上传到相框。</small><input id="file" type="file" accept="image/*"><canvas id="c" width="480" height="480"></canvas><button id="send" disabled>上传这张图片</button><small id="msg">加载中…</small></main><script>const c=document.querySelector('#c'),ctx=c.getContext('2d'),file=document.querySelector('#file'),send=document.querySelector('#send'),msg=document.querySelector('#msg');let imageReady=false;function draw(img){const s=Math.max(480/img.naturalWidth,480/img.naturalHeight),w=img.naturalWidth*s,h=img.naturalHeight*s;ctx.clearRect(0,0,480,480);ctx.save();ctx.beginPath();ctx.arc(240,240,240,0,Math.PI*2);ctx.clip();ctx.drawImage(img,(480-w)/2,(480-h)/2,w,h);ctx.restore();imageReady=true;send.disabled=false}file.onchange=()=>{const f=file.files[0];if(!f)return;const im=new Image;im.onload=()=>{draw(im);URL.revokeObjectURL(im.src)};im.src=URL.createObjectURL(f)};send.onclick=async()=>{if(!imageReady)return;send.disabled=true;msg.textContent='正在转换及上传…';const p=ctx.getImageData(0,0,480,480).data,raw=new Uint8Array(480*480*2);for(let i=0,j=0;i<p.length;i+=4){let v=((p[i]&248)<<8)|((p[i+1]&252)<<3)|(p[i+2]>>3);raw[j++]=v&255;raw[j++]=v>>8}const f=new FormData;f.append('image',new Blob([raw],{type:'application/octet-stream'}),'circle.rgb');try{const r=await fetch('/upload',{method:'POST',body:f});msg.textContent=await r.text()}catch(e){msg.textContent='上传失败：'+e}send.disabled=false;};fetch('/status').then(r=>r.json()).then(x=>msg.textContent='已保存 '+x.count+' 张。'+x.hint).catch(()=>msg.textContent='');</script></html>)HTML";
 
+#if 0 // Wi-Fi provisioning is intentionally disabled; keep this page here for reference only.
 const char WIFI_SETUP_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wi-Fi 配网</title><style>body{margin:0;background:#101114;color:#f4f4f5;font:16px system-ui}main{max-width:520px;margin:auto;padding:28px 18px}input,select,button{box-sizing:border-box;width:100%;font:inherit;margin:8px 0;padding:12px;border-radius:9px;border:0}button{background:#4f7cff;color:#fff;font-weight:700}button.alt{background:#333740}small{color:#b8bbc5;line-height:1.6;display:block}a{color:#9db6ff}</style><main><h2>Wi-Fi 配网</h2><small>保存成功后，设备每次进入“WiFi 上传”都会自动连接此网络；离开设置页后仅关闭设备热点，路由器 Wi-Fi 保持连接。</small><button id="scan" class="alt">扫描附近 Wi-Fi</button><select id="ssid"><option value="">请先扫描并选择网络</option></select><input id="password" type="password" placeholder="Wi-Fi 密码（开放网络可留空）" autocomplete="current-password"><button id="save">保存并连接</button><small id="msg">正在读取状态…</small><p><a href="/">返回图片上传</a></p></main><script>const ssid=document.querySelector('#ssid'),password=document.querySelector('#password'),scan=document.querySelector('#scan'),save=document.querySelector('#save'),msg=document.querySelector('#msg');async function status(){try{const x=await (await fetch('/wifi/status')).json();msg.textContent=x.connected?'已连接 '+x.ssid:(x.saved?'已保存网络：'+x.ssid:'尚未保存 Wi-Fi');}catch(e){msg.textContent='无法读取状态';}}scan.onclick=async()=>{scan.disabled=true;msg.textContent='正在扫描…';try{const x=await (await fetch('/wifi/scan')).json();ssid.replaceChildren();if(!x.networks.length){ssid.add(new Option('未发现网络',''));}x.networks.forEach(n=>ssid.add(new Option(n.ssid+' ('+n.rssi+' dBm)',n.ssid)));msg.textContent='请选择网络并输入密码';}catch(e){msg.textContent='扫描失败，请重试';}scan.disabled=false;};save.onclick=async()=>{if(!ssid.value){msg.textContent='请先选择 Wi-Fi';return;}save.disabled=true;msg.textContent='正在连接，最多等待 15 秒…';try{const r=await fetch('/wifi/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({ssid:ssid.value,password:password.value})}),x=await r.json();msg.textContent=x.message||'完成';}catch(e){msg.textContent='连接失败，请检查密码后重试';}save.disabled=false;};status();</script></html>)HTML";
+
+#endif
 
 const char GIF_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>GIF 上传</title><style>body{margin:0;background:#101114;color:#f4f4f5;font:16px system-ui;text-align:center}main{max-width:520px;margin:auto;padding:28px 18px}input,button{box-sizing:border-box;width:100%;font:inherit;margin:10px 0;padding:12px;border-radius:9px;border:0}button{background:#e04444;color:white;font-weight:700}button:disabled{opacity:.45}canvas{width:min(72vw,320px);height:min(72vw,320px);border-radius:50%;background:#000}progress{width:100%;height:18px;margin:10px 0;accent-color:#e04444}small{display:block;color:#b8bbc5;line-height:1.6}a{color:#9db6ff}</style><main><h2>上传 GIF 动画</h2><small>直接上传原始 GIF，由 ESP32 从 SD 卡实时解码播放。上传期间请保持页面亮屏并留在前台。</small><input id="file" type="file" accept="image/gif,.gif"><canvas id="c" width="480" height="480"></canvas><button id="send" disabled>直接上传 GIF</button><progress id="progress" value="0" max="100"></progress><small id="msg">请选择 GIF 文件</small><p><a href="/">返回图片上传</a></p></main><script>
@@ -153,7 +158,6 @@ async function decodeGIF(buffer,total){const b=new Uint8Array(buffer);let p=0;co
 function uploadGIF(data){return new Promise((resolve,reject)=>{const x=new XMLHttpRequest;x.open('POST','/gif/upload');x.upload.onprogress=e=>{if(!e.lengthComputable)return;const percent=Math.round(e.loaded/e.total*100);progress.value=percent;msg.textContent='正在上传 '+percent+'%  '+(e.loaded/1048576).toFixed(1)+' / '+(e.total/1048576).toFixed(1)+' MB'};x.onload=()=>x.status>=200&&x.status<300?resolve(x.responseText):reject(Error(x.responseText||'服务器写入失败'));x.onerror=()=>reject(Error('网络连接中断'));x.send(data)})}
 send.onclick=async()=>{if(!chosen)return;send.disabled=true;progress.value=0;try{const f=new FormData;f.append('gif',chosen,chosen.name);await uploadGIF(f);progress.value=100;msg.textContent='GIF 上传完成；退出设置后开始播放。'}catch(e){msg.textContent='失败：'+e.message}send.disabled=false};
 </script></html>)HTML";
-
 const char MEDIA_PAGE[] PROGMEM = R"HTML(
 <!doctype html><html lang="zh-CN"><meta name="viewport" content="width=device-width,initial-scale=1"><title>媒体管理</title><style>body{margin:0;background:#101114;color:#f4f4f5;font:16px system-ui}main{max-width:520px;margin:auto;padding:28px 18px}section{display:flex;align-items:center;justify-content:space-between;background:#202228;border-radius:10px;padding:12px 14px;margin:10px 0}button{font:inherit;border:0;border-radius:8px;padding:9px 14px;background:#cf3f45;color:white;font-weight:700}small{color:#b8bbc5}a{color:#9db6ff}</style><main><h2>媒体管理</h2><small>删除后无法恢复，请确认所选项目。</small><div id="list">正在读取…</div><p><a href="/">返回图片上传</a></p></main><script>
 const list=document.querySelector('#list');async function load(){try{const x=await(await fetch('/media/status')).json();list.replaceChildren();for(let i=0;i<x.images;i++)add('图片 '+(i+1),'image',i);for(let i=0;i<x.gifs;i++)add('GIF 动画 '+(i+1),'gif',i);if(!x.images&&!x.gifs)list.textContent='暂无媒体';}catch(e){list.textContent='读取失败'}}function add(name,type,index){const row=document.createElement('section'),label=document.createElement('span'),button=document.createElement('button');label.textContent=name;button.textContent='删除';button.onclick=async()=>{if(!confirm('确定删除“'+name+'”吗？'))return;button.disabled=true;const r=await fetch('/media/delete',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({type,index})});if(!r.ok)alert(await r.text());await load()};row.append(label,button);list.append(row)}load();
@@ -331,7 +335,7 @@ String wifiAddressLabel() {
 
 void drawSettingsItem(uint16_t *buffer, uint8_t item, int y, const char *label) {
   const bool selected = settingsFocus == item;
-  const bool wifiActive = item == SETTINGS_WIFI && wifiUploadActive;
+  const bool wifiActive = item == SETTINGS_WIFI_UPLOAD && wifiUploadActive;
   const bool switchItem = item == SETTINGS_BRAKE_LIGHT || item == SETTINGS_AUTO_BRAKE;
   const bool switchOn = (item == SETTINGS_BRAKE_LIGHT && brakeLightEnabled) || (item == SETTINGS_AUTO_BRAKE && autoBrakeLightEnabled);
   const bool wifiFlashOn = (millis() / 400) & 1;
@@ -373,9 +377,9 @@ void drawSettingsPage() {
     drawCenteredSettingsText(dst, "TO SAVE", 294, 2, 0xFFE0);
   } else {
     drawSettingsItem(dst, SETTINGS_BRIGHTNESS, 112, "BRIGHTNESS");
-    drawSettingsItem(dst, SETTINGS_WIFI, 158, "WIFI UPLOAD");
-    drawSettingsItem(dst, SETTINGS_BRAKE_LIGHT, 204, brakeLightEnabled ? "BRAKE LIGHT ON" : "BRAKE LIGHT OFF");
-    drawSettingsItem(dst, SETTINGS_AUTO_BRAKE, 250, autoBrakeLightEnabled ? "AUTO BRAKE ON" : "AUTO BRAKE OFF");
+    drawSettingsItem(dst, SETTINGS_BRAKE_LIGHT, 158, brakeLightEnabled ? "BRAKE LIGHT ON" : "BRAKE LIGHT OFF");
+    drawSettingsItem(dst, SETTINGS_AUTO_BRAKE, 204, autoBrakeLightEnabled ? "AUTO BRAKE ON" : "AUTO BRAKE OFF");
+    drawSettingsItem(dst, SETTINGS_WIFI_UPLOAD, 250, "WIFI UPLOAD");
     if (autoBrakeLightEnabled) drawCenteredSettingsText(dst, autoBrakeStatus.c_str(), 300, 2, solarLocationValid ? 0x07FF : 0xFFE0);
     drawSettingsItem(dst, SETTINGS_BACK, 330, "BACK");
     const String wifiStatus = wifiStatusLabel();
@@ -467,7 +471,7 @@ bool showAnimationFrame() {
   const int crop = min(gifCanvasWidth, gifCanvasHeight);
   const int sourceX0 = (gifCanvasWidth - crop) / 2;
   const int sourceY0 = (gifCanvasHeight - crop) / 2;
-  const int gifQuarterTurns = ((int)lroundf(LEVEL_ANGLE_OFFSET_DEG / 90.0f) % 4 + 4) % 4;
+  const int gifQuarterTurns = ((int)lroundf((LEVEL_ANGLE_OFFSET_DEG + GIF_ROTATION_CORRECTION_DEG) / 90.0f) % 4 + 4) % 4;
   int16_t sourceX[SCREEN_SIZE], sourceY[SCREEN_SIZE];
   for (int i = 0; i < SCREEN_SIZE; ++i) {
     sourceX[i] = sourceX0 + i * crop / SCREEN_SIZE;
@@ -689,17 +693,45 @@ function batchPost(url,field,data,name,index,total){return new Promise((resolve,
 file.onchange=async()=>{batchFiles=Array.from(file.files);mediaProgress.style.display='none';mediaProgress.value=0;send.disabled=!batchFiles.length;if(!batchFiles.length){msg.textContent='请选择媒体文件';return}try{if(await batchIsGif(batchFiles[0])){ctx.fillStyle='#000';ctx.fillRect(0,0,480,480)}else draw(await batchLoadImage(batchFiles[0]))}catch(e){}msg.textContent='已选择 '+batchFiles.length+' 个文件，可混合上传图片和 GIF'};
 send.onclick=async()=>{if(!batchFiles.length)return;send.disabled=true;file.disabled=true;mediaProgress.style.display='inline-block';mediaProgress.value=0;let success=0,failed=[];for(let i=0;i<batchFiles.length;i++){const chosen=batchFiles[i];try{const gif=await batchIsGif(chosen),data=gif?chosen:await batchImageBlob(chosen);await batchPost(gif?'/gif/upload':'/upload',gif?'gif':'image',data,gif?chosen.name:'circle.rgb',i,batchFiles.length);success++}catch(e){failed.push(chosen.name+'：'+e.message)}mediaProgress.value=Math.round((i+1)/batchFiles.length*100)}send.disabled=false;file.disabled=false;msg.textContent='上传完成：成功 '+success+' 个，失败 '+failed.length+' 个'+(failed.length?'。'+failed.join('；'):'')};
 </script></html>)JS");
-  page.replace("</main>", "<p><a href=\"/media\" style=\"color:#ffcf70\">管理和删除媒体</a></p><p><a href=\"/wifi-setup\" style=\"color:#9db6ff\">Wi-Fi 配网</a></p></main>");
+  page.replace("</main>", "<p><a href=\"/media\" style=\"color:#ffcf70\">管理和删除媒体</a></p></main>");
   server.send(200, "text/html; charset=utf-8", page);
 }
 void handleStatus() { String hint = sdReady ? "媒体保存至 SD 卡；短按下一项，双击上一项" : "图片暂存内存且不支持 GIF，重启会清空；短按下一项，双击上一项"; server.send(200, "application/json", "{\"count\":" + String(imageCount) + ",\"gifs\":" + String(gifCount) + ",\"hint\":\"" + hint + "\"}"); }
+/* Wi-Fi provisioning handlers are intentionally disabled.
 void handleWifiSetupPage() { server.send_P(200, "text/html; charset=utf-8", WIFI_SETUP_PAGE); }
 void handleWifiStatus() {
   const bool connected = WiFi.status() == WL_CONNECTED;
   server.send(200, "application/json", "{\"saved\":" + String(savedWifiSsid.length() ? "true" : "false") + ",\"connected\":" + String(connected ? "true" : "false") + ",\"ssid\":\"" + jsonEscape(connected ? WiFi.SSID() : savedWifiSsid) + "\"}");
 }
 void handleWifiScan() {
-  const int found = WiFi.scanNetworks(false, true);
+  // Keep the configuration AP available while scanning. Use the asynchronous
+  // API and poll for completion; some Arduino-ESP32 core versions return 0
+  // prematurely from the blocking scan when AP+STA mode is active.
+  if (WiFi.getMode() == WIFI_OFF) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(AP_SSID, AP_PASSWORD);
+    delay(200);
+  }
+  WiFi.scanDelete();
+  int found = WiFi.scanNetworks(true, true);
+  if (found == WIFI_SCAN_RUNNING) {
+    const uint32_t deadline = millis() + 15000;
+    do {
+      delay(50);
+      found = WiFi.scanComplete();
+    } while (found == WIFI_SCAN_RUNNING && millis() < deadline);
+  }
+  if (found < 0) {
+    WiFi.scanDelete();
+    // Reset only the station side. This clears a stale scan/association
+    // state without intentionally dropping the configuration AP.
+    WiFi.disconnect(false, false);
+    delay(150);
+    WiFi.mode(WIFI_AP_STA);
+    delay(100);
+    found = WiFi.scanNetworks(false, true, false, 1200);
+  }
+  Serial.printf("Wi-Fi scan result: %d\n", found);
   String json = "{\"networks\":[";
   for (int i = 0; i < found; ++i) {
     if (i) json += ',';
@@ -725,6 +757,7 @@ void handleWifiConnect() {
   Serial.printf("Wi-Fi saved and connected: %s\n", WiFi.localIP().toString().c_str());
   server.send(200, "application/json", "{\"message\":\"已保存并连接成功。下次进入 WiFi 上传会自动连接。\"}");
 }
+*/
 void handleUploadDone() { server.send(uploadOk ? 200 : 400, "text/plain; charset=utf-8", uploadOk ? "上传成功，已显示新图片。" : "上传失败：请重新选择一张图片。"); }
 void handleUpload() {
   HTTPUpload &up = server.upload();
@@ -877,7 +910,6 @@ void confirmSettingsItem() {
       } else brightnessAdjustActive = false;
       drawSettingsPage();
       break;
-    case SETTINGS_WIFI: startUploadWiFi(); break;
     case SETTINGS_BRAKE_LIGHT:
       autoBrakeLightEnabled = false;
       saveAutoBrakeSetting();
@@ -899,6 +931,9 @@ void confirmSettingsItem() {
         refreshBrakeVisual();
       }
       drawSettingsPage();
+      break;
+    case SETTINGS_WIFI_UPLOAD:
+      startUploadWiFi();
       break;
 #if 0 // Performance management settings are temporarily disabled.
     case SETTINGS_PERFORMANCE: applyPowerMode(MODE_PERFORMANCE); break;
@@ -951,17 +986,9 @@ void handleButton() {
 }
 void connectWiFi() {
   stationConnected = false;
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID, AP_PASSWORD); // Phone can always return to the device hotspot.
-  const String ssid = savedWifiSsid.length() ? savedWifiSsid : String(WIFI_SSID);
-  const String password = savedWifiSsid.length() ? savedWifiPassword : String(WIFI_PASSWORD);
-  if (ssid.length()) {
-    WiFi.begin(ssid.c_str(), password.c_str());
-    for (uint8_t i = 0; i < 30 && WiFi.status() != WL_CONNECTED; ++i) delay(500);
-    stationConnected = WiFi.status() == WL_CONNECTED;
-  }
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(AP_SSID, AP_PASSWORD); // Upload hotspot only; no station/configuration mode.
   Serial.printf("热点 %s，访问 http://%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
-  if (stationConnected) Serial.printf("已自动连接 Wi-Fi，局域网访问 http://%s\n", WiFi.localIP().toString().c_str());
 }
 void startWebServer() {
   if (!serverRoutesReady) {
@@ -972,10 +999,7 @@ void startWebServer() {
     server.on("/media", HTTP_GET, handleMediaPage);
     server.on("/media/status", HTTP_GET, handleMediaStatus);
     server.on("/media/delete", HTTP_POST, handleMediaDelete);
-    server.on("/wifi-setup", HTTP_GET, handleWifiSetupPage);
-    server.on("/wifi/status", HTTP_GET, handleWifiStatus);
-    server.on("/wifi/scan", HTTP_GET, handleWifiScan);
-    server.on("/wifi/connect", HTTP_POST, handleWifiConnect);
+    // Wi-Fi provisioning routes intentionally disabled: no scan/connect/save endpoints.
     serverRoutesReady = true;
   }
   if (!serverRunning) { server.begin(); serverRunning = true; }
@@ -989,9 +1013,9 @@ void startUploadWiFi() {
   drawSettingsPage();
 }
 void stopUploadWiFi() {
-  WiFi.softAPdisconnect(true); // Stop only the device hotspot; retain the router connection.
-  WiFi.mode(WIFI_STA);
-  stationConnected = WiFi.status() == WL_CONNECTED;
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_OFF);
+  stationConnected = false;
   wifiUploadActive = false;
 }
 void leaveSettings() { brightnessAdjustActive = false; stopUploadWiFi(); settingsActive = false; renderedAngle = 1000.0f; if (animationPlaying) showAnimationFrame(); else if (currentImage >= 0 && currentImage < imageCount) showImage(currentImage); else if (currentGif >= 0 && currentGif < gifCount && startAnimation(currentGif)) showAnimationFrame(); else if (imageCount) showImage(0); else if (animationAvailable && startAnimation(0)) showAnimationFrame(); else { clearScreen(); drawNoImageMessage(); } }
@@ -1005,16 +1029,9 @@ void enterDeepSleep() {
 }
 void setup() {
   Serial.begin(115200);
-  loadWifiCredentials();
+  // loadWifiCredentials(); // Disabled: Wi-Fi configuration is not exposed or used.
   pinMode(0, INPUT_PULLUP); I2C_Init(); delay(120); TCA9554PWR_Init(0x00); Set_EXIO(EXIO_PIN8, Low); Backlight_Init(); Set_Backlight(screenBrightness); LCD_Init(); if (!initLevelDisplay()) printf("RGB double frame buffer unavailable\n"); imuReady = LevelIMU_Init(); if (imuReady) LevelIMU_Update(levelAngle); if (USE_SD_CARD) { SD_MMC.setPins(2, 1, 42, -1, -1, -1); Set_EXIO(EXIO_PIN4, High); delay(10); sdReady = SD_MMC.begin("/sdcard", true) && SD_MMC.cardType() != CARD_NONE; } if (sdReady) { migrateLegacyAnimation(); scanImages(); scanAnimation(); if (imageCount) showImage(0); else if (animationAvailable && startAnimation(0)) showAnimationFrame(); else { clearScreen(); drawNoImageMessage(); } } else { clearScreen(); drawNoImageMessage(); }
-  const String bootSsid = savedWifiSsid.length() ? savedWifiSsid : String(WIFI_SSID);
-  const String bootPassword = savedWifiSsid.length() ? savedWifiPassword : String(WIFI_PASSWORD);
-  if (bootSsid.length()) {
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(bootSsid.c_str(), bootPassword.c_str()); // Connect in the background; do not delay display startup.
-    startWebServer();
-    Serial.printf("Wi-Fi auto-connect started: %s\n", bootSsid.c_str());
-  } else WiFi.mode(WIFI_OFF);
+  WiFi.mode(WIFI_OFF); // Start the upload hotspot only after selecting WIFI UPLOAD.
 }
 void loop() {
   if (serverRunning) server.handleClient();

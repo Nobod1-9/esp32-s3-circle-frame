@@ -15,8 +15,8 @@
 - BOOT 单键操作：短按下一项、双击上一项、长按约 1 秒确认/进入设置、主页面长按约 3 秒休眠。
 - 设置屏幕亮度、Wi-Fi 上传、手动刹车灯及日落自动刹车灯。
 - 刹车时在图片边缘显示红色圆环。
-- 保存家庭 Wi-Fi 凭据并在重启后自动连接；退出设置后关闭设备热点，但保留路由器连接。
-- 联网后通过公网 IP 获取大致位置、通过 NTP 校时，并在设备本地计算日出日落。开发板没有 GPS，因此 VPN、手机热点或异地网络出口可能导致位置偏差。
+- 选择“WIFI UPLOAD”后开启设备热点 `CircleFrame`（密码 `12345678`），仅用于上传和管理照片/GIF；不提供家庭 Wi-Fi 配网或保存功能。
+- Wi-Fi 仅用于本地上传，不连接外部路由器；自动刹车的联网定位/校时功能因此不会启动。
 
 ### 硬件与环境
 
@@ -39,10 +39,9 @@
 
 1. 插入 FAT32 格式的 Micro SD 卡并启动设备。
 2. 长按 BOOT 约 1 秒进入设置，选择 `WIFI UPLOAD`。
-3. 首次使用可连接热点 `CircleFrame`，默认密码为 `12345678`，访问 `http://192.168.4.1`。
-4. 也可以进入 Wi-Fi 配网页面保存家庭 Wi-Fi；连接成功后设置页会显示设备局域网 IP。
-5. 手机访问设备地址，多选普通图片和 GIF 后上传。设备会按顺序逐个处理文件。
-6. 在“管理和删除媒体”页面可分别删除任意图片或 GIF。
+3. 手机连接热点 `CircleFrame`（密码 `12345678`），访问 `http://192.168.4.1`。
+4. 多选普通图片和 GIF 后上传。设备会按顺序逐个处理文件。
+5. 在“管理和删除媒体”页面可分别删除任意图片或 GIF。
 
 建议在准备公开或用于实际产品前修改 `AP_PASSWORD`，不要把个人 Wi-Fi 密码写入源码。通过网页保存的家庭 Wi-Fi 凭据存放在 ESP32 NVS 中，不会进入 Git 仓库。
 
@@ -70,7 +69,7 @@ This Arduino project targets the Waveshare **ESP32-S3-LCD-2.8C** with its 480×4
 - Configure brightness, Wi-Fi upload, manual brake light, and sunset-based automatic brake-light availability.
 - Draw a red outer ring when braking is detected.
 - Save home Wi-Fi credentials and reconnect after reboot. Leaving settings disables the device access point while retaining the router connection.
-- When online, obtain an approximate location from the public IP, synchronize time over NTP, and calculate sunrise/sunset locally. The board has no GPS, so VPNs, phone hotspots, or remote network exits may reduce location accuracy.
+- Wi-Fi is used only for local uploads; the device does not connect to an external router, so network-based automatic-brake location/time synchronization is disabled.
 
 ### Hardware and toolchain
 
@@ -95,7 +94,7 @@ Install `AnimatedGIF` 2.2.0 from the Arduino Library Manager, open `sketch_aug31
 2. Hold BOOT for about 1 second to enter settings and select `WIFI UPLOAD`.
 3. For first-time setup, connect to the `CircleFrame` access point using the default password `12345678`, then open `http://192.168.4.1`.
 4. Alternatively, save a home Wi-Fi network on the Wi-Fi setup page. Once connected, the settings screen shows the device's LAN IP address.
-5. Open the device address on your phone, select multiple still images and GIFs, and upload them. Files are processed sequentially.
+5. Connect your phone to the `CircleFrame` hotspot (password `12345678`), open `http://192.168.4.1`, select multiple still images and GIFs, and upload them. Files are processed sequentially.
 6. Use the media-management page to delete individual images or GIFs.
 
 Change `AP_PASSWORD` before public or production use, and do not place personal Wi-Fi credentials in source code. Home Wi-Fi credentials saved through the web UI live in ESP32 NVS and are never committed to Git.
