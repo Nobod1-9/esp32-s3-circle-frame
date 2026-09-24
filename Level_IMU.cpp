@@ -23,10 +23,10 @@ bool angleReady = false;
 bool sensorEnabled = false;
 uint32_t sampleIntervalUs = 8000;
 float gyroScaleDps = 256.0f / 32768.0f;
-float gravityX = 0.0f, gravityY = 0.0f, gravityZ = 0.0f;
+float gravityX = 0.0f, gravityY = 0.0f;
 bool gravityReady = false;
 uint32_t brakeUntilMs = 0;
-constexpr float BRAKE_ACCEL_THRESHOLD_RAW = 1400.0f;
+constexpr float BRAKE_ACCEL_THRESHOLD_RAW = 1000.0f;
 constexpr uint32_t BRAKE_HOLD_MS = 1500;
 
 float wrap180(float angle) {
@@ -110,19 +110,28 @@ bool LevelIMU_Update(float &angleDegrees) {
   const int16_t gzRaw = (int16_t)((uint16_t)data[11] << 8 | data[10]);
 
   // Estimate the gravity vector slowly. The remaining vector is transient
-  // acceleration; without a fixed vehicle-forward axis it detects strong
-  // braking and other sharp motion alike.
+  // acceleration. Since the display is normally vertical, the direction in
+  // the display plane perpendicular to gravity is the front/back direction.
+  // Only acceleration on that axis is allowed to trigger the brake light;
+  // this filters out bumps along the up/down (gravity) direction and motion
+  // normal to the display.
   if (!gravityReady) {
-    gravityX = axRaw; gravityY = ayRaw; gravityZ = azRaw;
+    gravityX = axRaw; gravityY = ayRaw;
     gravityReady = true;
   } else {
     constexpr float GRAVITY_FILTER = 0.025f;
     gravityX += ((float)axRaw - gravityX) * GRAVITY_FILTER;
     gravityY += ((float)ayRaw - gravityY) * GRAVITY_FILTER;
-    gravityZ += ((float)azRaw - gravityZ) * GRAVITY_FILTER;
-    const float dx = axRaw - gravityX, dy = ayRaw - gravityY, dz = azRaw - gravityZ;
-    if (dx * dx + dy * dy + dz * dz >= BRAKE_ACCEL_THRESHOLD_RAW * BRAKE_ACCEL_THRESHOLD_RAW)
-      brakeUntilMs = millis() + BRAKE_HOLD_MS;
+    const float dx = axRaw - gravityX, dy = ayRaw - gravityY;
+    const float gravityPlaneLength = sqrtf(gravityX * gravityX + gravityY * gravityY);
+    if (gravityPlaneLength >= 1500.0f) {
+      // Tangent to the gravity vector in the display plane: front/back.
+      const float frontX = -gravityY / gravityPlaneLength;
+      const float frontY = gravityX / gravityPlaneLength;
+      const float frontBackAccel = dx * frontX + dy * frontY;
+      if (fabsf(frontBackAccel) >= BRAKE_ACCEL_THRESHOLD_RAW)
+        brakeUntilMs = millis() + BRAKE_HOLD_MS;
+    }
   }
 
   // When the display is almost horizontal, gravity is perpendicular to its

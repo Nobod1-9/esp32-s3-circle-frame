@@ -34,7 +34,7 @@ constexpr uint32_t LONG_PRESS_MS = 1000;
 constexpr uint32_t SLEEP_PRESS_MS = 3000;
 uint32_t levelUpdateMs = 20;
 float levelDeadBandDeg = 0.7f;
-constexpr float LEVEL_ANGLE_OFFSET_DEG = 90.0f; // Default image orientation: 90 degrees clockwise.
+constexpr float LEVEL_ANGLE_OFFSET_DEG = 180.0f; // Default image orientation, clockwise.
 constexpr float LEVEL_ROTATION_SIGN = -1.0f;    // Change to +1 if compensation runs backwards.
 constexpr float BRIGHTNESS_TILT_SIGN = 1.0f;    // Change to -1 if left/right brightness feels reversed.
 constexpr float BRIGHTNESS_DEGREES_PER_STEP = 2.0f;
@@ -72,7 +72,7 @@ uint8_t screenBrightness = 100;
 uint8_t brightnessAtAdjustStart = 100;
 float brightnessReferenceAngle = 0.0f;
 bool levelLockEnabled = true;
-bool brakeLightEnabled = false;
+bool brakeLightEnabled = true;
 bool brakeLightActive = false;
 bool autoBrakeLightEnabled = false;
 bool solarLocationValid = false;
@@ -386,6 +386,12 @@ void drawSettingsPage() {
       drawCenteredSettingsText(dst, wifiAddress.c_str(), 430, 2, 0x07FF);
     }
   }
+  // The settings UI is drawn in logical coordinates; rotate the completed page 180 degrees.
+  for (int i = 0, j = SCREEN_SIZE * SCREEN_SIZE - 1; i < j; ++i, --j) {
+    const uint16_t pixel = dst[i];
+    dst[i] = dst[j];
+    dst[j] = pixel;
+  }
   if (displayVsync) {
     xSemaphoreTake(displayVsync, 0);
     xSemaphoreTake(displayVsync, pdMS_TO_TICKS(40));
@@ -461,13 +467,23 @@ bool showAnimationFrame() {
   const int crop = min(gifCanvasWidth, gifCanvasHeight);
   const int sourceX0 = (gifCanvasWidth - crop) / 2;
   const int sourceY0 = (gifCanvasHeight - crop) / 2;
+  const int gifQuarterTurns = ((int)lroundf(LEVEL_ANGLE_OFFSET_DEG / 90.0f) % 4 + 4) % 4;
   int16_t sourceX[SCREEN_SIZE], sourceY[SCREEN_SIZE];
-  for (int i = 0; i < SCREEN_SIZE; ++i) { sourceX[i] = sourceX0 + i * crop / SCREEN_SIZE; sourceY[i] = sourceY0 + (SCREEN_SIZE - 1 - i) * crop / SCREEN_SIZE; }
+  for (int i = 0; i < SCREEN_SIZE; ++i) {
+    sourceX[i] = sourceX0 + i * crop / SCREEN_SIZE;
+    sourceY[i] = sourceY0 + i * crop / SCREEN_SIZE;
+  }
   for (int y = 0; y < SCREEN_SIZE; ++y) {
     uint16_t *row = dst + y * SCREEN_SIZE;
-    const int sx = sourceX[y];
     for (int x = 0; x < SCREEN_SIZE; ++x) {
-      const size_t offset = ((size_t)sourceY[x] * gifCanvasWidth + sx) * 2;
+      int sx, sy;
+      switch (gifQuarterTurns) {
+        case 0: sx = sourceX[x];              sy = sourceY[y];              break;
+        case 1: sx = sourceX[y];              sy = sourceY[SCREEN_SIZE - 1 - x]; break;
+        case 2: sx = sourceX[SCREEN_SIZE - 1 - x]; sy = sourceY[SCREEN_SIZE - 1 - y]; break;
+        default: sx = sourceX[SCREEN_SIZE - 1 - y]; sy = sourceY[x];       break;
+      }
+      const size_t offset = ((size_t)(sourceY0 + (sy - sourceY0)) * gifCanvasWidth + (sourceX0 + (sx - sourceX0))) * 2;
       row[x] = source[offset] | (uint16_t)source[offset + 1] << 8;
     }
   }
